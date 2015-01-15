@@ -13,8 +13,13 @@ import atexit
 import sys
 import socket
 import pygame
-import pytumblr
 import config
+from email.MIMEMultipart import MIMEMultipart
+from email.MIMEText import MIMEText
+from email.MIMEImage import MIMEImage
+from email.MIMEBase import MIMEBase
+from email import Encoders
+import smtplib
 from signal import alarm, signal, SIGALRM, SIGKILL
 
 ########################
@@ -28,21 +33,13 @@ button1_pin = 22 # pin for the big red button
 button2_pin = 18 # pin for button to shutdown the pi
 button3_pin = 16 # pin for button to end the program, but not shutdown the pi
 
-total_pics = 3 # number of pics  to be taken
+total_pics = 1 # number of pics  to be taken
 capture_delay = 2 # delay between pics
 prep_delay = 3 # number of seconds at step 1 as users prep to have photo taken
 gif_delay = 50 # How much time between frames in the animated gif
 
 test_server = 'www.google.com'
 real_path = os.path.dirname(os.path.realpath(__file__))
-
-# Setup the tumblr OAuth Client
-client = pytumblr.TumblrRestClient(
-    config.consumer_key,
-    config.consumer_secret,
-    config.token,
-    config.token_secret,
-);
 
 transform_x = 640 # how wide to scale the jpg when replaying
 transfrom_y = 480 # how high to scale the jpg when replaying
@@ -154,10 +151,10 @@ def display_pics(jpg_group):
         raise KeyboardInterrupt
     for i in range(0, replay_cycles): #show pics a few times
 		for i in range(1, total_pics+1): #show each pic
-			filename = config.file_path + jpg_group + "-0" + str(i) + ".jpg"
+			filename = config.file_path + jpg_group + ".jpg"
                         show_image(filename);
 			time.sleep(replay_delay) # pause 
-			
+
 # define the photo taking function for when the big button is pressed 
 def start_photobooth(): 
 	################################# Begin Step 1 ################################# 
@@ -177,15 +174,14 @@ def start_photobooth():
 	################################# Begin Step 2 #################################
 	print "Taking pics" 
 	now = time.strftime("%Y-%m-%d-%H:%M:%S") #get the current date and time for the start of the filename
+        filename = config.file_path + now + '.jpg'
 	try: #take the photos
-		for i, filename in enumerate(camera.capture_continuous(config.file_path + now + '-' + '{counter:02d}.jpg')):
-			GPIO.output(led2_pin,True) #turn on the LED
-			print(filename)
-			sleep(0.25) #pause the LED on for just a bit
-			GPIO.output(led2_pin,False) #turn off the LED
-			sleep(capture_delay) # pause in-between shots
-			if i == total_pics-1:
-				break
+                camera.capture(filename);
+		GPIO.output(led2_pin,True) #turn on the LED
+		print(filename)
+		sleep(0.25) #pause the LED on for just a bit
+		GPIO.output(led2_pin,False) #turn off the LED
+		sleep(capture_delay) # pause in-between shots
 	finally:
 		camera.stop_preview()
 		camera.close()
@@ -194,15 +190,28 @@ def start_photobooth():
         show_image(real_path + "/cat.png")
 
 	GPIO.output(led3_pin,True) #turn on the LED
-	graphicsmagick = "gm convert -delay " + str(gif_delay) + " " + config.file_path + now + "*.jpg " + config.file_path + now + ".gif" 
-	os.system(graphicsmagick) #make the .gif
-	print "Uploading to tumblr. Please check " + config.tumblr_blog + ".tumblr.com soon."
+	print "Uploading to flickr."
 
 	connected = is_connected() #check to see if you have an internet connection
 	while connected: 
 		try:
-			file_to_upload = config.file_path + now + ".gif"
-                        client.create_photo(config.tumblr_blog, state="published", tags=["drumminhandsPhotoBooth"],  data=file_to_upload)
+                        msg = MIMEMultipart()
+                        msg['Subject'] = now
+                        msg['From'] = config.addr_from
+                        msg['To'] = config.addr_to
+                        fp = open(filename, 'rb')
+                        part = MIMEBase('image', 'gif')
+                        part.set_payload( fp.read() )
+                        Encoders.encode_base64(part)
+                        part.add_header('Content-Disposition', 'attachment; filename="%s"' % os.path.basename(config.file_path))
+                        fp.close()
+                        msg.attach(part)
+                        server = smtplib.SMTP('smtp.gmail.com:587')
+                        server.starttls()
+                        server.login(config.user_name, config.password)
+                        server.sendmail(msg['From'], msg['To'], msg.as_string())
+                        server.quit()
+
 			break
 		except ValueError:
 			print "Oops. No internect connection. Upload later."
